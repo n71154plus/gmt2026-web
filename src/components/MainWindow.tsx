@@ -6,7 +6,7 @@ import { MenuBar } from './MenuBar'
 import { StatusBar } from './StatusBar'
 import { LeftPanel } from './LeftPanel'
 import { MainContent } from './MainContent'
-import { AppState } from '@/types'
+import { AppState, ProductFileInfo } from '@/types'
 
 export function MainWindow() {
   const [appState, setAppState] = useState<AppState>({
