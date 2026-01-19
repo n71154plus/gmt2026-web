@@ -68,6 +68,24 @@
    - `NODE_ENV`: `production`
    - `NEXT_PUBLIC_API_URL`: 你的 API 端點（如果有外部 API）
 
+### 常見配置問題
+
+如果遇到 "`functions` property cannot be used in conjunction with the `builds` property" 錯誤：
+
+**解決方案**：移除 `vercel.json` 中的 `builds` 和 `functions` 屬性，讓 Vercel 自動檢測 Next.js 配置：
+
+```json
+{
+  "version": 2,
+  "regions": ["sin1"]
+}
+```
+
+Vercel 會自動：
+- 檢測 Next.js 項目
+- 配置 API 路由
+- 設定適當的運行時
+
 ### 自訂域名
 
 1. 在 Vercel 項目設定中
