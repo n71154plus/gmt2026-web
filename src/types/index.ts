@@ -84,7 +84,7 @@ export interface AppState {
   modelName: string;
   selectedProduct?: ProductFileInfo;
   selectedAddress?: number;
-  selectedRegisterTable?: RegisterTable;
+  selectedRegisterTable?: RegisterTableViewModel;
   registerTables: RegisterTableViewModel[];
   deviceAddressesView: AddressEntry[];
   availableProducts: ProductFileInfo[];
