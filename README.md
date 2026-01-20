@@ -77,9 +77,15 @@ src/
 │   ├── MenuBar.tsx       # 選單列
 │   ├── StatusBar.tsx     # 狀態列
 │   ├── LeftPanel.tsx     # 左側面板
-│   └── MainContent.tsx   # 主要內容
+│   ├── MainContent.tsx   # 主要內容
+│   ├── ChartPanel.tsx    # 圖表面板
+│   └── ChartComponents.tsx # 圖表組件
 ├── lib/                  # 工具函數
-└── types/                # TypeScript類型定義
+│   ├── lua/              # Lua解析器
+│   ├── hex/              # HEX文件處理
+│   └── auth/             # 用戶認證
+├── types/                # TypeScript類型定義
+└── __tests__/            # 測試文件
 ```
 
 ## 主要組件說明
@@ -104,12 +110,12 @@ src/
 
 ## 開發計劃
 
-- [ ] 實現完整的Lua腳本解析器
-- [ ] 添加圖表顯示功能
-- [ ] 實現HEX文件處理
-- [ ] 添加用戶認證和權限管理
-- [ ] 優化響應式設計
-- [ ] 添加測試覆蓋
+- [x] 實現完整的Lua腳本解析器 (`src/lib/lua/`)
+- [x] 添加圖表顯示功能 (`src/components/ChartComponents.tsx`, `ChartPanel.tsx`)
+- [x] 實現HEX文件處理 (`src/lib/hex/`)
+- [x] 添加用戶認證和權限管理 (`src/lib/auth/`)
+- [x] 優化響應式設計 (移動端適配、標籤導航)
+- [x] 添加測試覆蓋 (`__tests__/`, Jest 配置)
 
 ## 貢獻
 

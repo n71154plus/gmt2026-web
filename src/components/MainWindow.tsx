@@ -1,14 +1,21 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { TitleBar } from './TitleBar'
 import { MenuBar } from './MenuBar'
 import { StatusBar } from './StatusBar'
 import { LeftPanel } from './LeftPanel'
 import { MainContent } from './MainContent'
-import { AppState, ProductFileInfo } from '@/types'
+import { ChartPanel } from './ChartPanel'
+import { RuleResultPanel } from './RuleResultPanel'
+import { AppState, ProductFileInfo, RegisterViewModel, RuleResult } from '@/types'
 
 export function MainWindow() {
+  const [activeTab, setActiveTab] = useState<'registers' | 'chart'>('registers')
+  const [isMobile, setIsMobile] = useState(false)
+  const [isLeftPanelOpen, setIsLeftPanelOpen] = useState(true)
+  const [viewMode, setViewMode] = useState<'GroupView' | 'AddressSort'>('GroupView')
+
   const [appState, setAppState] = useState<AppState>({
     title: 'GMT I2C Tool',
     modelName: '',
@@ -23,6 +30,22 @@ export function MainWindow() {
     hasI2CErrorMessage: false,
     hasLuaErrorMessage: false,
   })
+
+  // 檢測螢幕大小
+  useEffect(() => {
+    const checkScreenSize = () => {
+      setIsMobile(window.innerWidth < 768)
+      if (window.innerWidth < 768) {
+        setIsLeftPanelOpen(false)
+      } else {
+        setIsLeftPanelOpen(true)
+      }
+    }
+
+    checkScreenSize()
+    window.addEventListener('resize', checkScreenSize)
+    return () => window.removeEventListener('resize', checkScreenSize)
+  }, [])
 
   // 載入可用的產品列表
   useEffect(() => {
@@ -56,64 +79,181 @@ export function MainWindow() {
     }
   }, [appState.selectedAddress, appState.registerTables])
 
+  // 重新計算 DAC Values（用於處理參數依賴）
+  const recalculateDAC = useCallback(async (
+    regName: string,
+    parameters: Record<string, number>
+  ): Promise<(string | number)[]> => {
+    try {
+      const response = await fetch('/api/products/recalculate', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          regName,
+          parameters,
+          filename: appState.selectedProduct?.FileName
+        })
+      })
+
+      if (response.ok) {
+        const data = await response.json()
+        return data.dacValues || []
+      }
+    } catch (error) {
+      console.error('重新計算 DAC 值失敗:', error)
+    }
+    return []
+  }, [appState.selectedProduct])
+
+  // 評估規則
+  const evaluateRules = useCallback(async (product: ProductFileInfo | null, registerTables: RegisterTableViewModel[]) => {
+    if (!product?.FileName) {
+      console.log('evaluateRules: 沒有選擇產品，跳過')
+      return
+    }
+
+    if (!registerTables || registerTables.length === 0) {
+      console.log('evaluateRules: 沒有寄存器表，跳過')
+      return
+    }
+
+    console.log('evaluateRules: 開始評估規則...')
+
+    try {
+      // 構建 RegValues 表
+      const regValues: Record<string, any> = {}
+      registerTables.forEach(rt => {
+        rt.Registers.forEach(reg => {
+          // 使用 RegName_Value 格式
+          if (reg.DACValues && reg.DACValues.length > 0) {
+            const value = reg.DACValues[reg.DAC]
+            regValues[`${reg.Name}_Value`] = value
+            console.log(`  RegValues.${reg.Name}_Value =`, value)
+          }
+          regValues[`${reg.Name}_DAC`] = reg.DAC
+        })
+      })
+
+      console.log('regValues keys:', Object.keys(regValues))
+
+      const response = await fetch('/api/products/rules', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          filename: product.FileName,
+          registerValues: JSON.stringify(regValues)
+        })
+      })
+
+      if (response.ok) {
+        const data = await response.json()
+        console.log('規則評估結果:', data.ruleResults)
+        setAppState(prev => ({
+          ...prev,
+          ruleResults: data.ruleResults || [],
+          selectedRuleResult: data.ruleResults?.[0]
+        }))
+      } else {
+        console.error('規則評估 API 返回錯誤:', response.status)
+      }
+    } catch (error) {
+      console.error('評估規則失敗:', error)
+    }
+  }, [])
+
   // 處理產品選擇變化
   const handleProductSelect = async (product: ProductFileInfo) => {
     try {
-      // 載入產品數據
-      const response = await fetch(`/api/products/${product.FileName}`)
-      if (response.ok) {
-        const productData = await response.json()
-        // 這裡應該解析產品數據並設置 registerTables
-        // 目前使用模擬數據
-        const mockRegisterTables = [
-          {
-            Name: 'Default',
-            DeviceAddress: [0x5E],
-            Registers: [
-              {
-                Name: 'CS_CLK_Interval',
-                Group: 'Charge Sharing Setting',
-                Addr: 0x02,
-                MSB: 4,
-                LSB: 2,
-                DACValueExpr: 'lookup(\'Disable\',\'1us\',\'1.5us\',\'2us\',\'2.5us\',\'3us\',\'3.5us\',\'4us\')',
-                DAC: 0,
-                Unit: 'time',
-                ReadOnly: false,
-                IsTextBlock: false,
-                CurrentValue: 0,
-                DACValues: ['Disable', '1us', '1.5us', '2us', '2.5us', '3us', '3.5us', '4us'],
-                IsCheckBox: false,
-                AddressColorIndex: 0
-              }
-            ],
-            Data: [],
-            Pages: ['Page 1'],
-            SelectedPage: 'Page 1',
-            ViewMode: 'GroupView' as const,
-            FilterText: '',
-            RegistersView: [],
-            CheckSumCollection: {}
-          }
-        ]
+      console.log('選擇產品:', product.FileName)
+      const url = `/api/products/${product.FileName}`
+      console.log('請求 URL:', url)
+      const response = await fetch(url)
+      console.log('API 響應狀態:', response.status)
+      console.log('API 響應 OK:', response.ok)
 
-        updateAppState({
-          selectedProduct: product,
-          registerTables: mockRegisterTables,
-          selectedRegisterTable: undefined,
-          selectedAddress: undefined,
-          deviceAddressesView: [
-            { RegisterTableName: 'Default', Value: 0x5E }
-          ]
-        })
+      if (!response.ok) {
+        console.error('API 響應錯誤:', response.status, response.statusText)
+        return
       }
+
+      const data = await response.json()
+      console.log('API 返回數據 keys:', Object.keys(data))
+      console.log('product:', data.product)
+      console.log('RegisterTable 數量:', data.product?.RegisterTable?.length)
+
+      if (!data.product?.RegisterTable?.length) {
+        console.error('RegisterTable 為空或未定義')
+        return
+      }
+
+      console.log('Registers 數量:', data.product.RegisterTable[0]?.Registers?.length)
+
+      // 將 RegisterTable 轉換為 ViewModel 格式
+      const registerTables = data.product.RegisterTable.map((table: any, idx: number) => ({
+        Name: table.Name,
+        DeviceAddress: table.DeviceAddress,
+        Registers: table.Registers.map((reg: any, rIdx: number) => ({
+          ...reg,
+          CurrentValue: reg.DAC,
+          IsCheckBox: false,
+          AddressColorIndex: rIdx % 8,
+          DependentParameters: reg.DependentParameters || []
+        })),
+        Data: [],
+        Pages: ['Page 1'],
+        SelectedPage: 'Page 1',
+        ViewMode: 'GroupView' as const,
+        FilterText: '',
+        RegistersView: [],
+        CheckSumCollection: table.ChecksumMemIndexCollect || {},
+        NeedShowMemIndex: table.NeedShowMemIndex || []
+      }))
+
+      // 生成設備地址視圖
+      const deviceAddressesView = registerTables.flatMap((table: any) =>
+        table.DeviceAddress.map((addr: number) => ({
+          RegisterTableName: table.Name,
+          Value: addr
+        }))
+      )
+
+      console.log('生成的 registerTables:', registerTables)
+      console.log('設備地址:', deviceAddressesView)
+
+      updateAppState({
+        selectedProduct: product,
+        modelName: data.product.Name,
+        registerTables,
+        selectedRegisterTable: registerTables[0],
+        selectedAddress: deviceAddressesView[0]?.Value,
+        deviceAddressesView,
+        ruleResults: [],
+        selectedRuleResult: undefined
+      }, () => {
+        // 狀態更新完成後的回調
+        console.log('handleProductSelect: 狀態已更新，調用 evaluateRules')
+        evaluateRules(product, registerTables)
+      })
     } catch (error) {
       console.error('載入產品數據失敗:', error)
+      console.error('錯誤堆疊:', error instanceof Error ? error.stack : 'N/A')
     }
   }
 
-  const updateAppState = (updates: Partial<AppState>) => {
-    setAppState(prev => ({ ...prev, ...updates }))
+  const updateAppState = (updates: Partial<AppState>, callback?: () => void) => {
+    setAppState(prev => {
+      const newState = { ...prev, ...updates }
+      // 在狀態更新完成後調用回調
+      if (callback) {
+        // 使用 setTimeout 確保狀態已完全更新
+        setTimeout(callback, 0)
+      }
+      return newState
+    })
   }
 
   return (
@@ -123,6 +263,8 @@ export function MainWindow() {
         title={appState.title}
         modelName={appState.modelName}
         onModelNameChange={(modelName) => updateAppState({ modelName })}
+        onMenuToggle={() => setIsLeftPanelOpen(!isLeftPanelOpen)}
+        isMobile={isMobile}
       />
 
       {/* 選單列 */}
@@ -142,23 +284,96 @@ export function MainWindow() {
 
       {/* 主要內容區域 */}
       <div className="flex flex-1 overflow-hidden">
-        {/* 左側面板 */}
-        <LeftPanel
-          availableProducts={appState.availableProducts}
-          selectedProduct={appState.selectedProduct}
-          deviceAddressesView={appState.deviceAddressesView}
-          selectedAddress={appState.selectedAddress}
-          isI2cBusy={appState.isI2cBusy}
-          onProductSelect={handleProductSelect}
-          onAddressSelect={(address) => updateAppState({ selectedAddress: address })}
-        />
+        {/* 左側面板 - 響應式顯示 */}
+        {isLeftPanelOpen && (
+          <div className={`
+            ${isMobile ? 'absolute inset-0 z-50' : 'relative'}
+          `}>
+            <div className="h-full bg-white border-r border-gray-300 shadow-lg flex flex-col">
+              <LeftPanel
+                availableProducts={appState.availableProducts}
+                selectedProduct={appState.selectedProduct}
+                deviceAddressesView={appState.deviceAddressesView}
+                selectedAddress={appState.selectedAddress}
+                isI2cBusy={appState.isI2cBusy}
+                onProductSelect={handleProductSelect}
+                onAddressSelect={(address) => updateAppState({ selectedAddress: address })}
+              />
+              {/* Design Rule Check 結果 */}
+              <div className="p-2 border-t border-gray-200">
+                <RuleResultPanel
+                  ruleResults={appState.ruleResults}
+                  selectedRuleResult={appState.selectedRuleResult}
+                  onSelectRule={(rule) => updateAppState({ selectedRuleResult: rule })}
+                />
+              </div>
+              {isMobile && (
+                <button
+                  onClick={() => setIsLeftPanelOpen(false)}
+                  className="absolute top-2 right-2 p-2 bg-gray-200 rounded-full"
+                >
+                  ✕
+                </button>
+              )}
+            </div>
+          </div>
+        )}
 
-        {/* 右側主要內容 */}
-        <MainContent
-          selectedRegisterTable={appState.selectedRegisterTable}
-          registerTables={appState.registerTables}
-          onRegisterTableSelect={(table) => updateAppState({ selectedRegisterTable: table })}
-        />
+        {/* 主內容區域 */}
+        <div className="flex-1 flex flex-col overflow-hidden">
+          {/* 標籤切換 - 移動端顯示 */}
+          {isMobile && (
+            <div className="flex border-b border-gray-300 bg-white">
+              <button
+                onClick={() => setActiveTab('registers')}
+                className={`flex-1 py-2 px-4 text-sm font-medium ${
+                  activeTab === 'registers'
+                    ? 'text-blue-600 border-b-2 border-blue-600'
+                    : 'text-gray-600'
+                }`}
+              >
+                暫存器
+              </button>
+              <button
+                onClick={() => setActiveTab('chart')}
+                className={`flex-1 py-2 px-4 text-sm font-medium ${
+                  activeTab === 'chart'
+                    ? 'text-blue-600 border-b-2 border-blue-600'
+                    : 'text-gray-600'
+                }`}
+              >
+                圖表
+              </button>
+            </div>
+          )}
+
+          {/* 右側主要內容 */}
+          <div className="flex-1 overflow-auto relative">
+            {/* 暫存器標籤 - 桌面端顯示標題 */}
+            {!isMobile && (
+              <div className="px-4 py-2 bg-gray-50 border-b border-gray-200">
+                <span className="font-semibold text-gray-700">
+                  {appState.selectedRegisterTable?.Name || '暫存器配置'}
+                </span>
+              </div>
+            )}
+
+            {/* 根據標籤顯示內容 */}
+            {(!isMobile || activeTab === 'registers') && (
+              <MainContent
+                selectedRegisterTable={appState.selectedRegisterTable}
+                registerTables={appState.registerTables}
+                onRegisterTableSelect={(table) => updateAppState({ selectedRegisterTable: table })}
+                onRecalculateDAC={recalculateDAC}
+              />
+            )}
+
+            {/* 圖表標籤 - 僅移動端 */}
+            {isMobile && activeTab === 'chart' && (
+              <ChartPanel />
+            )}
+          </div>
+        </div>
       </div>
     </div>
   )

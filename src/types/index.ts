@@ -26,9 +26,12 @@ export interface Register {
   LSB: number;
   DACValueExpr: string;
   DAC: number;
+  DACValues?: string[];
+  ValuesCount?: number;
   Unit?: string;
   ReadOnly?: boolean;
   IsTextBlock?: boolean;
+  IsCheckBox?: boolean;
 }
 
 // I2C操作記錄
@@ -114,6 +117,7 @@ export interface RegisterTableViewModel {
   FilterText: string;
   RegistersView: RegisterViewModel[];
   CheckSumCollection: { [key: string]: ChecksumInfo };
+  NeedShowMemIndex: number[];
 }
 
 // 暫存器視圖模型
@@ -125,13 +129,15 @@ export interface RegisterViewModel {
   LSB: number;
   DACValueExpr: string;
   DAC: number;
+  DACValues?: (string | number)[];
+  ValuesCount?: number;
   Unit?: string;
   ReadOnly?: boolean;
   IsTextBlock?: boolean;
   CurrentValue?: any;
-  DACValues?: any[];
   IsCheckBox: boolean;
   AddressColorIndex: number;
+  DependentParameters?: string[]; // 依賴的參數名稱列表
 }
 
 // 暫存器數據
