@@ -17,21 +17,39 @@ export interface RegisterTable {
   NeedShowMemIndex: number[];
 }
 
+// 位元段結構
+export interface BitSegment {
+  byteIndex: number;
+  hi: number;
+  lo: number;
+  width: number;
+  normalize(): BitSegment;
+}
+
+// 真實值類型
+export type RealValue = string | number;
+
 // 暫存器類型
 export interface Register {
   Name: string;
-  Group: string;
+  Group?: string;
+  Page?: string;
   Addr: number;
   MSB: number;
   LSB: number;
-  DACValueExpr: string;
+  DACValueExpr?: string;
   DAC: number;
-  DACValues?: string[];
+  DACValues?: RealValue[];
   ValuesCount?: number;
   Unit?: string;
   ReadOnly?: boolean;
   IsTextBlock?: boolean;
   IsCheckBox?: boolean;
+  MemI_B0?: BitSegment;
+  MemI_B1?: BitSegment;
+  BitLength?: number;
+  DefaultDAC?: number;
+  RecalculateDACValues(parameters?: Record<string, any>): void;
 }
 
 // I2C操作記錄
@@ -109,7 +127,7 @@ export interface AppState {
 export interface RegisterTableViewModel {
   Name: string;
   DeviceAddress: number[];
-  Registers: RegisterViewModel[];
+  Registers: Register[];
   Data: RegisterData[];
   Pages: string[];
   SelectedPage: string;

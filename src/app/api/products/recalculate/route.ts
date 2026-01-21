@@ -45,7 +45,7 @@ function parseLuaFile(filename: string, targetRegName: string) {
 export async function POST(request: Request) {
   try {
     const body = await request.json()
-    const { regName, parameters, filename } = body
+    const { regName, parameters, filename, currentRegisters } = body
 
     if (!regName) {
       return NextResponse.json({ error: '缺少寄存器名稱' }, { status: 400 })
@@ -78,23 +78,33 @@ export async function POST(request: Request) {
     // 構建 registerMap
     const registerMap: Record<string, { DAC: number, DACValues: (string | number)[] }> = {}
 
-    // 首先為每個 Register 計算初始 DACValues
-    for (const reg of parsedData.registers) {
-      if (reg.DACValueExpr) {
-        const values = calculateDACValues(reg.DACValueExpr, 256, {}, registerMap)
+    // 如果提供了 currentRegisters，使用它們來初始化 registerMap
+    if (currentRegisters && Array.isArray(currentRegisters)) {
+      for (const reg of currentRegisters) {
         registerMap[reg.Name] = {
-          DAC: reg.DefaultDAC,
-          DACValues: values
+          DAC: reg.DAC || 0,
+          DACValues: reg.DACValues || []
         }
-      } else {
-        // 沒有 DACValueExpr 的 Register，使用 DefaultDAC 作為索引的簡單值
-        const values: (string | number)[] = []
-        for (let i = 0; i < 256; i++) {
-          values.push(i)
-        }
-        registerMap[reg.Name] = {
-          DAC: reg.DefaultDAC,
-          DACValues: values
+      }
+    } else {
+      // 回退到舊邏輯：從解析的數據初始化
+      for (const reg of parsedData.registers) {
+        if (reg.DACValueExpr) {
+          const values = calculateDACValues(reg.DACValueExpr, 256, {}, registerMap)
+          registerMap[reg.Name] = {
+            DAC: reg.DefaultDAC,
+            DACValues: values
+          }
+        } else {
+          // 沒有 DACValueExpr 的 Register，使用 DefaultDAC 作為索引的簡單值
+          const values: (string | number)[] = []
+          for (let i = 0; i < 256; i++) {
+            values.push(i)
+          }
+          registerMap[reg.Name] = {
+            DAC: reg.DefaultDAC,
+            DACValues: values
+          }
         }
       }
     }
@@ -109,6 +119,13 @@ export async function POST(request: Request) {
         }
       }
     }
+
+    console.log('Updated registerMap with parameters:', parameters)
+    console.log('RegisterMap state:', Object.keys(registerMap).map(key => ({
+      name: key,
+      dac: registerMap[key].DAC,
+      value: registerMap[key].DACValues[registerMap[key].DAC]
+    })))
 
     // 重新計算目標 Register 的 DACValues
     const dacValues = calculateDACValues(parsedData.dacValueExpr, 256, parameters, registerMap)

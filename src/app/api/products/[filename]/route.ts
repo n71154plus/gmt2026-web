@@ -31,9 +31,9 @@ export function calculateDACValues(
     if (options.length > 0) return options
   }
 
-  console.log(`calculateDACValues: expr="${dacValueExpr}"`)
-  console.log(`calculateDACValues: externalParameters=`, externalParameters)
-  console.log(`calculateDACValues: registerMap keys=`, Object.keys(registerMap))
+  //console.log(`calculateDACValues: expr="${dacValueExpr}"`)
+  //console.log(`calculateDACValues: externalParameters=`, externalParameters)
+  //console.log(`calculateDACValues: registerMap keys=`, Object.keys(registerMap))
 
   // 通用表達式求值器
   const evaluateExpression = (dac: number): number => {
@@ -89,7 +89,7 @@ export function calculateDACValues(
         .replace(/\bSqrt\(/g, 'Math.sqrt(')
         .replace(/\bPow\(/g, 'Math.pow(')
 
-      console.log(`dac=${dac}: processedExpr="${processedExpr}"`)
+      //console.log(`dac=${dac}: processedExpr="${processedExpr}"`)
 
       // 執行表達式
       const result = eval(processedExpr)
@@ -97,22 +97,22 @@ export function calculateDACValues(
       // 處理結果
       if (typeof result === 'number') {
         if (isNaN(result)) {
-          console.log(`dac=${dac}: result is NaN, returning 0`)
+          //console.log(`dac=${dac}: result is NaN, returning 0`)
           return 0
         }
         if (!isFinite(result)) {
-          console.log(`dac=${dac}: result is infinite (${result}), returning 9999999`)
+          //console.log(`dac=${dac}: result is infinite (${result}), returning 9999999`)
           return result > 0 ? 9999999 : 0
         }
         // 四捨五入到小數點後2位
         const rounded = Math.round(result * 100) / 100
-        console.log(`dac=${dac}: result=${result} -> ${rounded}`)
+        //console.log(`dac=${dac}: result=${result} -> ${rounded}`)
         return rounded
       }
-      console.log(`dac=${dac}: result is not a number, returning 0`)
+      //console.log(`dac=${dac}: result is not a number, returning 0`)
       return 0
     } catch (e) {
-      console.warn(`DAC expression error: ${e}, expr: ${dacValueExpr}, dac=${dac}`)
+      //console.warn(`DAC expression error: ${e}, expr: ${dacValueExpr}, dac=${dac}`)
       return 0
     }
   }
@@ -236,16 +236,32 @@ export async function GET(
         }
       }
 
-      // 轉換 Registers 並計算 DACValues
+      // 第一次遍歷：計算沒有跨Register引用的DACValues
+      rawRegisters.forEach((reg: any) => {
+        // 簡單檢查是否有可能的跨Register引用
+        const hasCrossRef = reg.DACValueExpr &&
+          (reg.DACValueExpr.includes('_Value') || reg.DACValueExpr.includes('_DAC'))
+
+        if (!hasCrossRef) {
+          // 沒有跨Register引用，直接計算
+          const dacValues = calculateDACValues(reg.DACValueExpr || '', 256, {}, {})
+          registerMap[reg.Name] = {
+            DAC: reg.DAC ?? 0,
+            DACValues: dacValues
+          }
+        }
+      })
+
+      // 第二次遍歷：計算有跨Register引用的DACValues
       const registers = rawRegisters.map((reg: any) => {
-        // 計算 DACValues（傳入 registerMap 以支持跨 Register 參考）
+        // 計算 DACValues（現在registerMap包含了其他Register的信息）
         const dacValues = calculateDACValues(reg.DACValueExpr || '', 256, {}, registerMap)
         const isCheckbox = reg.IsCheckBox === true
 
-        console.log(`[API] Register ${reg.Name}: DACValueExpr="${reg.DACValueExpr}"`)
-        console.log(`[API] Register ${reg.Name}: DACValues count=${dacValues.length}, values=`, dacValues.slice(0, 10))
+        //console.log(`[API] Register ${reg.Name}: DACValueExpr="${reg.DACValueExpr}"`)
+        //console.log(`[API] Register ${reg.Name}: DACValues count=${dacValues.length}, values=`, dacValues.slice(0, 10))
 
-        // 更新 registerMap 中該 Register 的 DACValues
+        // 更新 registerMap
         registerMap[reg.Name] = {
           DAC: reg.DAC ?? 0,
           DACValues: dacValues

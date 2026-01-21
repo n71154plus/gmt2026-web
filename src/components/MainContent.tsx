@@ -1,13 +1,19 @@
 'use client'
 
-import { useState, useCallback, useMemo, useRef } from 'react'
-import { RegisterTableViewModel, RegisterViewModel } from '@/types'
+import { useState, useCallback, useMemo, useRef, useEffect } from 'react'
+import { RegisterTableViewModel, RegisterViewModel, Register } from '@/types'
+import { DataBits } from '@/lib/dataBits'
+import { ConcreteRegisterViewModel } from '@/types/concreteRegisterViewModel'
+import { BitSegmentImpl } from '@/lib/bitSegment'
+import ByteGrid from './ByteGrid'
 
 interface MainContentProps {
   selectedRegisterTable?: RegisterTableViewModel
   registerTables: RegisterTableViewModel[]
   onRegisterTableSelect: (table: RegisterTableViewModel) => void
   onRecalculateDAC?: (regName: string, parameters: Record<string, number>) => (string | number)[]
+  onRegisterChange?: (registerViewModels?: ConcreteRegisterViewModel[], fallbackTables?: any[]) => void
+  viewMode?: 'GroupView' | 'AddressSort'
 }
 
 // 淺色系背景顏色
@@ -26,158 +32,331 @@ export function MainContent({
   selectedRegisterTable,
   registerTables,
   onRegisterTableSelect,
-  onRecalculateDAC
+  onRecalculateDAC,
+  onRegisterChange,
+  viewMode: externalViewMode
 }: MainContentProps) {
   const [filterText, setFilterText] = useState('')
-  const [viewMode, setViewMode] = useState<'GroupView' | 'AddressSort'>('GroupView')
+  const [internalViewMode, setInternalViewMode] = useState<'GroupView' | 'AddressSort'>('GroupView')
+  const viewMode = externalViewMode ?? internalViewMode
   // 使用 forceUpdate 來強制重新渲染
   const [, setForceUpdate] = useState(0)
 
-  // 過濾寄存器
-  const filteredRegisters = selectedRegisterTable?.Registers.filter(reg => {
+  // 使用 ref 來追蹤是否正在初始化 DataBits（避免循環更新）
+  const isInitializingDataBits = useRef(false)
+  // 使用 ref 來追蹤初始化計時器
+  const initTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  // 使用 ref 來追蹤當前的 RegisterTable，避免依賴 state
+  const registerTableRef = useRef<RegisterTableViewModel | null>(null);
+  // 使用 ref 來存儲最新的 onRegisterChange 回調
+  const onRegisterChangeRef = useRef(onRegisterChange);
+  // 更新 ref
+  useEffect(() => {
+    onRegisterChangeRef.current = onRegisterChange;
+  }, [onRegisterChange]);
+
+  // 創建 DataBits 實例 - 使用 ref 確保實例穩定
+  const dataBitsRef = useRef<DataBits | null>(null);
+  const getCurrentDataBits = useCallback(() => dataBitsRef.current, []);
+
+  // 使用 ref 來存儲 registerViewModels，避免循環依賴
+  const registerViewModelsRef = useRef<ConcreteRegisterViewModel[]>([]);
+
+  // 標記是否正在重新計算 DACValues，避免重複觸發
+  const isRecalculatingDACValues = useRef(false);
+
+  // 創建 dataMutated 回調 - 不依賴外部 callback，避免每次渲染都重新創建
+  const dataMutatedCallback = useCallback((vm: ConcreteRegisterViewModel) => {
+    // 如果正在初始化 DataBits，完全跳過這個回調
+    if (isInitializingDataBits.current) {
+      return;
+    }
+
+    // 當 RegisterViewModel 變化時，更新 RegisterTable 的數據
+    const currentRegisterTable = registerTableRef.current;
+    const currentDataBits = dataBitsRef.current;
+
+    if (!currentRegisterTable || !currentDataBits) return;
+
+    let hasChanges = false;
+
+    // 更新所有受影響的位元組
+    vm.byteIndicesList.forEach(address => {
+      const byteValue = currentDataBits.getByte(address);
+      const existingData = currentRegisterTable.Data.find(d => d.Address === address);
+      if (existingData) {
+        if (existingData.Bytes[0] !== byteValue) {
+          existingData.Bytes[0] = byteValue;
+          hasChanges = true;
+        }
+      } else {
+        currentRegisterTable.Data.push({
+          Address: address,
+          Bytes: [byteValue]
+        });
+        hasChanges = true;
+      }
+    });
+  }, []); // 不依賴任何變量，使用 ref 訪問最新值
+
+  const dataBits = useMemo(() => {
+    if (!selectedRegisterTable) {
+      dataBitsRef.current = null;
+      return null;
+    }
+
+    // 如果已經有實例且 RegisterTable 沒有重大變化，保持現有實例
+    // 使用引用比較來避免不必要的重新創建
+    if (dataBitsRef.current &&
+        dataBitsRef.current.byteCount >= Math.max(...selectedRegisterTable.NeedShowMemIndex, 0) + 1) {
+      return dataBitsRef.current;
+    }
+
+    // 創建新的實例
+    const byteCount = Math.max(...selectedRegisterTable.NeedShowMemIndex, 255) + 1;
+    const bytes = new Uint8Array(byteCount);
+
+    // 從現有數據填充
+    selectedRegisterTable.Data.forEach(dataItem => {
+      if (dataItem.Address < byteCount && dataItem.Bytes.length > 0) {
+        bytes[dataItem.Address] = dataItem.Bytes[0];
+      }
+    });
+
+    const newBits = new DataBits(bytes);
+    dataBitsRef.current = newBits;
+    return newBits;
+  }, [selectedRegisterTable]);
+
+  // 更新 registerTableRef
+  useEffect(() => {
+    registerTableRef.current = selectedRegisterTable ?? null;
+  }, [selectedRegisterTable]);
+
+  // 創建 RegisterViewModel 實例（不依賴 dataBits）
+  const registerViewModels = useMemo(() => {
+    if (!selectedRegisterTable) return [];
+
+    return selectedRegisterTable.Registers.map(register => {
+      // 轉換 Register 為包含 BitSegment 的格式
+      const enhancedRegister: Register = {
+        ...register,
+        MemI_B0: BitSegmentImpl.fromAddrMsbLsb(register.Addr, register.MSB, register.LSB),
+        BitLength: register.MSB - register.LSB + 1,
+        ValuesCount: register.ValuesCount || Math.pow(2, register.MSB - register.LSB + 1)
+      };
+
+      // 先創建 RegisterViewModel，但暫時不綁定 dataBits
+      const vm = new ConcreteRegisterViewModel(enhancedRegister, null as any, dataMutatedCallback);
+
+      return vm;
+    });
+  }, [selectedRegisterTable, dataMutatedCallback]);
+
+  // 更新 registerViewModelsRef
+  useEffect(() => {
+    registerViewModelsRef.current = registerViewModels;
+  }, [registerViewModels]);
+
+  // 當 RegisterViewModel 第一次準備好時，觸發規則評估
+  const hasInitializedRules = useRef(false);
+  useEffect(() => {
+    if (registerViewModels.length > 0 && onRegisterChange && !hasInitializedRules.current) {
+      hasInitializedRules.current = true;
+      onRegisterChange(registerViewModels);
+    }
+  }, [registerViewModels.length, onRegisterChange]);
+
+  // 單獨綁定 dataBits，避免循環依賴
+  useEffect(() => {
+    if (!dataBits || registerViewModels.length === 0) return;
+
+    // 設置初始化標誌，避免循環更新
+    isInitializingDataBits.current = true;
+
+    // 清除之前的計時器
+    if (initTimeoutRef.current) {
+      clearTimeout(initTimeoutRef.current);
+    }
+
+    registerViewModels.forEach(vm => {
+      vm.rebindDataBits(dataBits);
+    });
+
+    // 延遲一段時間讓 ByteGrid 有時間處理所有事件，然後清除初始化標誌
+    initTimeoutRef.current = setTimeout(() => {
+      isInitializingDataBits.current = false;
+      initTimeoutRef.current = null;
+    }, 500);
+
+    return () => {
+      // 清理計時器
+      if (initTimeoutRef.current) {
+        clearTimeout(initTimeoutRef.current);
+        initTimeoutRef.current = null;
+      }
+    };
+  }, [dataBits, registerViewModels]);
+
+  // 過濾的 RegisterViewModel
+  const filteredRegisterViewModels = registerViewModels.filter(vm => {
     if (!filterText) return true
     const searchText = filterText.toLowerCase()
-    return reg.Name.toLowerCase().includes(searchText) ||
-           reg.Group.toLowerCase().includes(searchText) ||
-           reg.Addr.toString(16).toLowerCase().includes(searchText)
-  }) || []
+    return vm.name.toLowerCase().includes(searchText) ||
+           vm.group.toLowerCase().includes(searchText) ||
+           vm.memI_B0Addr.toString(16).toLowerCase().includes(searchText)
+  })
 
   // 分組顯示 (群組檢視) - 按 Group 分組
-  const groupedRegisters = useMemo(() => {
-    return filteredRegisters.reduce((groups, reg) => {
-      const group = reg.Group || 'Main'
+  const groupedRegisterViewModels = useMemo(() => {
+    return filteredRegisterViewModels.reduce((groups, vm) => {
+      const group = vm.group
       if (!groups[group]) groups[group] = []
-      groups[group].push(reg)
+      groups[group].push(vm)
       return groups
-    }, {} as Record<string, RegisterViewModel[]>)
-  }, [filteredRegisters])
+    }, {} as Record<string, ConcreteRegisterViewModel[]>)
+  }, [filteredRegisterViewModels])
 
-  // 根據 NeedShowMemIndex 獲取要顯示的欄位
-  const needShowMemIndex = selectedRegisterTable?.NeedShowMemIndex || []
+  // 注意：我們不再在dataBits變化時自動更新RegisterTable.Data
+  // 因為RegisterViewModel的dataMutated回調已經處理了這個邏輯
+  // 這樣避免了重複更新
 
   // 強制重新渲染
   const forceRerender = useCallback(() => {
     setForceUpdate(prev => prev + 1)
   }, [])
 
-  // 處理寄存器值變更
-  const handleRegisterChange = useCallback((reg: RegisterViewModel, newValue: number) => {
-    // 更新寄存器值
-    reg.DAC = newValue
-    console.log(`Register ${reg.Name} value changed to: ${newValue}`)
+  // 處理 RegisterViewModel 值變更
+  const handleRegisterViewModelChange = useCallback((vm: ConcreteRegisterViewModel, newValue: number) => {
+    // console.log(`[handleRegisterViewModelChange] ${vm.name} value changed to: ${newValue}`)
 
-    // 強制 UI 更新
-    forceRerender()
+    // 記錄舊值
+    const oldDac = vm.dac;
+
+    // RegisterViewModel 的 DAC setter 會自動處理數據位元更新
+    vm.dac = newValue
+
+    // 如果值沒有改變，不需要進行後續處理
+    if (oldDac === newValue) {
+      return;
+    }
+
+    // console.log(`[handleRegisterViewModelChange] After setting, ${vm.name}.dac = ${vm.dac}`)
+
+    // 收集需要重新計算的寄存器
+    const recalculationPromises: Promise<void>[] = []
 
     // 檢查哪些寄存器依賴於此寄存器
     if (selectedRegisterTable && onRecalculateDAC) {
-      selectedRegisterTable.Registers.forEach(r => {
-        if (r.DependentParameters && r.DependentParameters.length > 0) {
-          const dependsOnThis = r.DependentParameters.some(param =>
-            param.toLowerCase().includes(reg.Name.toLowerCase()) ||
-            param.toLowerCase().includes(reg.Group?.toLowerCase() || '')
-          )
+      registerViewModels.forEach(r => {
+        let dependsOnThis = false
+        let externalParams: Record<string, number> = {}
+
+        // 檢查 DACValueExpr 中的變數引用
+        if (r.rawRegister.DACValueExpr) {
+          // 檢查是否包含當前寄存器的值引用，如 [Switching_Frequency_Value]
+          const valueRefPattern = new RegExp(`\\[${vm.name}_Value\\]`, 'i')
+          dependsOnThis = valueRefPattern.test(r.rawRegister.DACValueExpr)
 
           if (dependsOnThis) {
-            const externalParams: Record<string, number> = {}
-            r.DependentParameters.forEach(param => {
-              const paramReg = selectedRegisterTable.Registers.find(pr =>
-                pr.Name.toLowerCase().includes(param.toLowerCase()) ||
-                (pr.Group && param.toLowerCase().includes(pr.Group.toLowerCase()))
-              )
-              if (paramReg) {
-                externalParams[param] = paramReg.DAC
-              }
+            // 構建所有當前寄存器表中寄存器的 DAC 參數
+            registerViewModels.forEach(paramReg => {
+              externalParams[`${paramReg.name}_DAC`] = paramReg.dac
             })
-
-            const newDACValues = onRecalculateDAC(r.Name, externalParams)
-            r.DACValues = newDACValues
-            console.log(`Recalculated DACValues for ${r.Name}:`, newDACValues)
           }
+        }
+
+        if (dependsOnThis) {
+          // 收集重新計算的 Promise
+          const recalculationPromise = (async () => {
+            try {
+              const newDACValues = await onRecalculateDAC(r.name, externalParams)
+              r.rawRegister.DACValues = newDACValues
+              console.log(`Recalculated DACValues for ${r.name}:`, newDACValues)
+            } catch (error) {
+              console.error(`Failed to recalculate DACValues for ${r.name}:`, error)
+            }
+          })()
+          recalculationPromises.push(recalculationPromise)
         }
       })
     }
-  }, [selectedRegisterTable, onRecalculateDAC, forceRerender])
+
+    // 等待所有 DACValues 重新計算完成，然後觸發規則評估
+    const triggerRuleEvaluation = async () => {
+      if (recalculationPromises.length > 0) {
+        console.log(`Waiting for ${recalculationPromises.length} DAC recalculations to complete...`)
+        await Promise.all(recalculationPromises)
+        console.log('All DAC recalculations completed')
+      }
+
+      // 觸發規則重新評估
+      if (onRegisterChange) {
+        // console.log('Register changed, triggering rule evaluation...')
+        onRegisterChange()
+      }
+    }
+
+    triggerRuleEvaluation()
+  }, [selectedRegisterTable, registerViewModels, onRecalculateDAC, forceRerender, onRegisterChange])
 
   return (
     <div className="flex-1 flex flex-col bg-white">
-      {/* Byte Grid - 根據 NeedShowMemIndex 顯示 */}
-      <div className="h-10 border-b border-gray-300 px-2 flex items-center bg-gray-50 shrink-0">
-        <span className="text-xs font-medium text-gray-700 mr-2 shrink-0">Byte Data</span>
-        <div className="flex-1 overflow-x-auto">
-          <div className="flex gap-0.5 min-w-max">
-            {needShowMemIndex.map((index) => (
-              <div
-                key={`header-${index}`}
-                className="w-12 text-center text-xs font-mono text-gray-600 border-l border-gray-300 pl-1"
-              >
-                {typeof index === 'number' ? `0x${index.toString(16).toUpperCase().padStart(2, '0')}` : index}
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
+      {/* Byte Grid - 放在一個帶邊框的容器中 */}
+      {dataBits && (
+        <div className="border border-gray-300 rounded bg-white mb-2 shrink-0">
+          <ByteGrid
+            dataBits={dataBits}
+            visibleIndices={selectedRegisterTable?.NeedShowMemIndex}
+            headerFormat="0x{0:X2}"
+            onByteChanged={(index, value) => {
+              // 如果正在初始化 DataBits，完全跳過這個回調
+              // 這樣可以避免在初始化期間觸發任何外部更新
+              if (isInitializingDataBits.current) {
+                return;
+              }
 
-      {/* 數據行：顯示對應的值 */}
-      <div className="h-8 border-b border-gray-200 px-2 flex items-center shrink-0">
-        <span className="text-xs font-medium text-gray-700 mr-2 shrink-0"></span>
-        <div className="flex-1 overflow-x-auto">
-          <div className="flex gap-0.5 min-w-max">
-            {needShowMemIndex.map((index) => (
-              <div
-                key={`data-${index}`}
-                className="w-12 text-center text-xs font-mono text-gray-800 border-l border-gray-200 pl-1 bg-white"
-              >
-                --
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
+              // 只在非初始化期間記錄日誌
+              console.log(`Byte at address 0x${index.toString(16)} changed to: 0x${value.toString(16).padStart(2, '0')}`);
 
-      {/* 過濾器和視圖切換 */}
-      {selectedRegisterTable && (
-        <div className="h-12 border-b border-gray-300 p-4 flex items-center shrink-0">
-          <label className="text-sm font-medium text-gray-700 mr-2">過濾：</label>
+              // 觸發規則評估
+              onRegisterChange?.();
+            }}
+          />
+          </div>
+      )}
+
+      {/* 過濾器 - 只有在 AddressSort 模式時才顯示 */}
+      {selectedRegisterTable && viewMode === 'AddressSort' && (
+        <div className="mb-2 p-2 bg-white border border-gray-300 rounded shrink-0">
+          <div className="flex items-center">
+            <span className="text-sm font-medium text-gray-700 mr-2 shrink-0">過濾：</span>
           <input
             type="text"
             value={filterText}
             onChange={(e) => setFilterText(e.target.value)}
             placeholder="輸入名稱、群組或地址..."
-            className="flex-1 px-3 py-1 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="flex-1 px-2 py-1 text-sm border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-blue-500"
           />
-          {/* 視圖模式切換 */}
-          <div className="ml-4 flex border border-gray-300 rounded overflow-hidden">
-            <button
-              className={`px-3 py-1 text-sm ${viewMode === 'GroupView' ? 'bg-blue-500 text-white' : 'bg-white text-gray-700 hover:bg-gray-50'}`}
-              onClick={() => setViewMode('GroupView')}
-            >
-              群組檢視
-            </button>
-            <button
-              className={`px-3 py-1 text-sm ${viewMode === 'AddressSort' ? 'bg-blue-500 text-white' : 'bg-white text-gray-700 hover:bg-gray-50'}`}
-              onClick={() => setViewMode('AddressSort')}
-            >
-              位址排序
-            </button>
           </div>
         </div>
       )}
 
       {/* 暫存器列表 */}
-      <div className="flex-1 overflow-auto p-4">
+      <div className="flex-1 overflow-auto p-2">
         {!selectedRegisterTable ? (
           <div className="text-center text-gray-500 mt-10">
             <p>請選擇產品以載入暫存器配置</p>
           </div>
-        ) : filteredRegisters.length === 0 ? (
+        ) : filteredRegisterViewModels.length === 0 ? (
           <div className="text-center text-gray-500 mt-10">
             <p>沒有找到匹配的暫存器</p>
           </div>
         ) : viewMode === 'GroupView' ? (
           // 群組檢視 - 響應式多欄佈局 + 不同淺色背景
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-            {Object.entries(groupedRegisters).map(([group, registers], groupIndex) => (
+            {Object.entries(groupedRegisterViewModels).map(([group, registerViewModels], groupIndex) => (
               <div
                 key={group}
                 className={`rounded-lg border border-gray-200 overflow-hidden ${GROUP_COLORS[groupIndex % GROUP_COLORS.length]}`}
@@ -190,12 +369,17 @@ export function MainContent({
                 </div>
                 {/* 寄存器列表 */}
                 <div className="p-2 space-y-1 max-h-96 overflow-y-auto">
-                  {registers.map((register, index) => (
+                  {registerViewModels
+                    .filter(vm => vm.group === group)
+                    .map((vm, index) => (
                     <RegisterControl
-                      key={`${register.Name}-${index}`}
-                      register={register}
+                        key={`${vm.name}-${index}`}
+                        registerViewModel={vm}
                       viewMode={viewMode}
-                      onChange={handleRegisterChange}
+                        onChange={(vm, value) => {
+                          // 使用新的 RegisterViewModel
+                          handleRegisterViewModelChange(vm, value);
+                        }}
                     />
                   ))}
                 </div>
@@ -205,12 +389,12 @@ export function MainContent({
         ) : (
           // 位址排序 - 顯示地址和位元範圍
           <div className="space-y-1">
-            {filteredRegisters.map((register, index) => (
+            {filteredRegisterViewModels.map((vm, index) => (
               <RegisterControl
-                key={`${register.Name}-${index}`}
-                register={register}
+                key={`${vm.name}-${index}`}
+                registerViewModel={vm}
                 viewMode={viewMode}
-                onChange={handleRegisterChange}
+                onChange={handleRegisterViewModelChange}
               />
             ))}
           </div>
@@ -223,44 +407,47 @@ export function MainContent({
 // 單個 Register 控制項組件
 // 根據 Lua 中定義的屬性決定顯示類型：ComboBox、CheckBox 或 TextBlock
 function RegisterControl({
-  register,
+  registerViewModel,
   viewMode,
   onChange
 }: {
-  register: RegisterViewModel
+  registerViewModel: ConcreteRegisterViewModel
   viewMode: 'GroupView' | 'AddressSort'
-  onChange?: (reg: RegisterViewModel, value: number) => void
+  onChange?: (vm: ConcreteRegisterViewModel, value: number) => void
 }) {
   // 使用 useRef 來追蹤當前值，確保 UI 正確更新
-  const currentValueRef = useRef(register.DAC)
-  currentValueRef.current = register.DAC
+  const currentValueRef = useRef(registerViewModel.dac)
+  currentValueRef.current = registerViewModel.dac
 
   // 判斷控制項類型（完全參考 GMT2026 的邏輯）
   // 優先級：IsCheckBox > IsTextBlock > ComboBox > NumberInput
-  const isCheckBox = register.IsCheckBox === true
-  const isTextBlock = register.IsTextBlock === true
-  const hasDACValues = register.DACValues && register.DACValues.length > 0
+  const isCheckBox = registerViewModel.isCheckBox
+  const isTextBlock = registerViewModel.rawRegister.IsTextBlock === true
+  const hasDACValues = registerViewModel.dacValues && registerViewModel.dacValues.length > 0
   const isComboBox = !isCheckBox && !isTextBlock && hasDACValues
   const isNumberInput = !isCheckBox && !isTextBlock && !isComboBox
 
   // 位址排序模式下的地址位元範圍顯示
   const addressBitRange = viewMode === 'AddressSort' ? (
     <span className="w-36 text-sm font-mono text-gray-600 shrink-0">
-      0x{register.Addr.toString(16).toUpperCase().padStart(2, '0')} [{register.MSB}:{register.LSB}]
+      {registerViewModel.addressBitRange}
     </span>
   ) : null
 
   // 群組模式下的名稱
   const nameDisplay = viewMode === 'GroupView' ? (
-    <span className="text-sm font-medium text-gray-800 truncate min-w-0 flex-1" title={register.Name}>
-      {register.Name}
+    <span className="text-sm font-medium text-gray-800 truncate min-w-0 flex-1" title={registerViewModel.name}>
+      {registerViewModel.name}
     </span>
   ) : null
 
   // 處理值變更
   const handleValueChange = (newValue: number) => {
-    register.DAC = newValue
-    onChange?.(register, newValue)
+    registerViewModel.dac = newValue
+    // 延遲一點時間再觸發規則評估，確保狀態穩定
+    setTimeout(() => {
+      onChange?.(registerViewModel, newValue)
+    }, 50)
   }
 
   // 格式化數值為人類可讀格式（參考 GMT2026，自動添加 G/M/k 前綴）
@@ -294,14 +481,14 @@ function RegisterControl({
       const numValue = parseFloat(value)
       if (!isNaN(numValue)) {
         const formatted = formatNumberWithPrefix(numValue)
-        return register.Unit ? `${formatted} ${register.Unit}` : formatted
+        return registerViewModel.unit ? `${formatted} ${registerViewModel.unit}` : formatted
       }
-      return register.Unit ? `${value} ${register.Unit}` : value
+      return registerViewModel.unit ? `${value} ${registerViewModel.unit}` : value
     }
 
     // 數值格式化：自動判斷顯示格式
     const formatted = formatNumberWithPrefix(value)
-    return register.Unit ? `${formatted} ${register.Unit}` : formatted
+    return registerViewModel.unit ? `${formatted} ${registerViewModel.unit}` : formatted
   }
 
   return (
@@ -320,11 +507,11 @@ function RegisterControl({
             <label className="flex items-center space-x-1 cursor-pointer">
               <input
                 type="radio"
-                name={`${register.Name}_checkbox`}
+                name={`${registerViewModel.name}_checkbox`}
                 value={0}
                 checked={currentValueRef.current === 0}
                 onChange={() => handleValueChange(0)}
-                disabled={register.ReadOnly}
+                disabled={registerViewModel.isReadOnly}
                 className="w-4 h-4 text-blue-600"
               />
               <span className="text-xs text-gray-700">Off</span>
@@ -332,11 +519,11 @@ function RegisterControl({
             <label className="flex items-center space-x-1 cursor-pointer">
               <input
                 type="radio"
-                name={`${register.Name}_checkbox`}
+                name={`${registerViewModel.name}_checkbox`}
                 value={1}
                 checked={currentValueRef.current === 1}
                 onChange={() => handleValueChange(1)}
-                disabled={register.ReadOnly}
+                disabled={registerViewModel.isReadOnly}
                 className="w-4 h-4 text-blue-600"
               />
               <span className="text-xs text-gray-700">On</span>
@@ -355,9 +542,9 @@ function RegisterControl({
                 handleValueChange(newValue)
               }
             }}
-            disabled={register.ReadOnly}
+            disabled={registerViewModel.isReadOnly}
           >
-            {register.DACValues?.map((value, idx) => (
+            {registerViewModel.dacValues?.map((value, idx) => (
               <option key={idx} value={idx}>
                 {formatValue(value)}
               </option>
@@ -368,7 +555,7 @@ function RegisterControl({
         {/* TextBlock：只讀文字區塊 */}
         {isTextBlock && (
           <div className="w-full px-2 py-1 text-xs border border-gray-300 rounded bg-gray-100 text-gray-600">
-            {register.CurrentValue ?? register.DAC ?? ''}
+            {registerViewModel.displayValue ?? currentValueRef.current ?? ''}
           </div>
         )}
 
@@ -390,13 +577,13 @@ function RegisterControl({
                 handleValueChange(newValue)
               }
             }}
-            readOnly={register.ReadOnly}
+            readOnly={registerViewModel.isReadOnly}
           />
         )}
       </div>
 
       {/* 只讀標記 */}
-      {register.ReadOnly && (
+      {registerViewModel.isReadOnly && (
         <span className="text-xs text-gray-400 bg-gray-100 px-1.5 py-0.5 rounded ml-1 shrink-0">
           只讀
         </span>

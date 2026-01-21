@@ -8,6 +8,8 @@ interface LeftPanelProps {
   isI2cBusy: boolean
   onProductSelect: (product: ProductFileInfo) => void
   onAddressSelect: (address: number) => void
+  onReadRegisters?: () => void
+  onWriteRegisters?: () => void
 }
 
 export function LeftPanel({
@@ -17,7 +19,9 @@ export function LeftPanel({
   selectedAddress,
   isI2cBusy,
   onProductSelect,
-  onAddressSelect
+  onAddressSelect,
+  onReadRegisters,
+  onWriteRegisters
 }: LeftPanelProps) {
   // 按應用程式分組產品
   const groupedProducts = availableProducts.reduce((groups, product) => {
@@ -95,12 +99,14 @@ export function LeftPanel({
           {/* 這裡會動態生成按鈕 */}
           <button
             disabled={isI2cBusy}
+            onClick={onReadRegisters}
             className="w-full px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 disabled:bg-gray-400 disabled:cursor-not-allowed text-sm"
           >
             讀取暫存器
           </button>
           <button
             disabled={isI2cBusy}
+            onClick={onWriteRegisters}
             className="w-full px-4 py-2 bg-green-500 text-white rounded hover:bg-green-600 disabled:bg-gray-400 disabled:cursor-not-allowed text-sm"
           >
             寫入暫存器

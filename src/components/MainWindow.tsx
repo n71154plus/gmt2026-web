@@ -7,7 +7,6 @@ import { StatusBar } from './StatusBar'
 import { LeftPanel } from './LeftPanel'
 import { MainContent } from './MainContent'
 import { ChartPanel } from './ChartPanel'
-import { RuleResultPanel } from './RuleResultPanel'
 import { AppState, ProductFileInfo, RegisterViewModel, RuleResult } from '@/types'
 
 export function MainWindow() {
@@ -67,6 +66,38 @@ export function MainWindow() {
     loadAvailableProducts()
   }, [])
 
+  // 處理未捕獲的錯誤（特別是 WebAssembly 相關的錯誤）
+  useEffect(() => {
+    const handleUnhandledRejection = (event: PromiseRejectionEvent) => {
+      // 檢查是否是 wasmoon/WebAssembly 相關的權限錯誤
+      if (event.reason && typeof event.reason === 'object') {
+        const error = event.reason as any
+        if (error.code === 403 && error.msg === 'permission error' && error.name === 'n') {
+          // 這是已知的 WebAssembly 權限錯誤，不影響功能，抑制它
+          console.warn('WebAssembly permission error suppressed (non-critical)')
+          event.preventDefault()
+          return
+        }
+      }
+
+      // 對於其他錯誤，仍然記錄但不阻止預設行為
+      console.error('Unhandled promise rejection:', event.reason)
+    }
+
+    const handleError = (event: ErrorEvent) => {
+      // 可以添加其他全域錯誤處理邏輯
+      console.error('Global error:', event.error)
+    }
+
+    window.addEventListener('unhandledrejection', handleUnhandledRejection)
+    window.addEventListener('error', handleError)
+
+    return () => {
+      window.removeEventListener('unhandledrejection', handleUnhandledRejection)
+      window.removeEventListener('error', handleError)
+    }
+  }, [])
+
   // 當選擇地址變化時，自動選擇對應的暫存器表
   useEffect(() => {
     if (appState.selectedAddress !== undefined && appState.registerTables.length > 0) {
@@ -78,6 +109,72 @@ export function MainWindow() {
       }
     }
   }, [appState.selectedAddress, appState.registerTables])
+
+  // 讀取記憶體數據
+  const readRegisters = useCallback(async () => {
+    if (!appState.selectedRegisterTable || !appState.selectedAddress) {
+      console.log('readRegisters: 沒有選擇寄存器表或設備地址')
+      return
+    }
+
+    console.log('開始讀取記憶體數據...')
+    updateAppState({ isI2cBusy: true })
+
+    try {
+      // 模擬 I2C 讀取操作
+      await new Promise(resolve => setTimeout(resolve, 1000)) // 模擬延遲
+
+      // 更新 Byte Data（模擬從設備讀取的數據）
+      const updatedData = appState.selectedRegisterTable.NeedShowMemIndex.map(address => ({
+        Address: address,
+        Bytes: [Math.floor(Math.random() * 256)] // 隨機生成 0-255 的值
+      }))
+
+      // 更新選中的 RegisterTable 的 Data
+      const updatedRegisterTables = appState.registerTables.map(table => {
+        if (table.Name === appState.selectedRegisterTable?.Name) {
+          return {
+            ...table,
+            Data: updatedData
+          }
+        }
+        return table
+      })
+
+      updateAppState({
+        registerTables: updatedRegisterTables,
+        selectedRegisterTable: updatedRegisterTables.find(t => t.Name === appState.selectedRegisterTable?.Name)
+      })
+
+      console.log('記憶體數據讀取完成')
+    } catch (error) {
+      console.error('讀取記憶體數據失敗:', error)
+    } finally {
+      updateAppState({ isI2cBusy: false })
+    }
+  }, [appState.selectedRegisterTable, appState.selectedAddress, appState.registerTables])
+
+  // 寫入記憶體數據
+  const writeRegisters = useCallback(async () => {
+    if (!appState.selectedRegisterTable || !appState.selectedAddress) {
+      console.log('writeRegisters: 沒有選擇寄存器表或設備地址')
+      return
+    }
+
+    console.log('開始寫入記憶體數據...')
+    updateAppState({ isI2cBusy: true })
+
+    try {
+      // 模擬 I2C 寫入操作
+      await new Promise(resolve => setTimeout(resolve, 1000)) // 模擬延遲
+
+      console.log('記憶體數據寫入完成')
+    } catch (error) {
+      console.error('寫入記憶體數據失敗:', error)
+    } finally {
+      updateAppState({ isI2cBusy: false })
+    }
+  }, [appState.selectedRegisterTable, appState.selectedAddress])
 
   // 重新計算 DAC Values（用於處理參數依賴）
   const recalculateDAC = useCallback(async (
@@ -93,7 +190,8 @@ export function MainWindow() {
         body: JSON.stringify({
           regName,
           parameters,
-          filename: appState.selectedProduct?.FileName
+          filename: appState.selectedProduct?.FileName,
+          currentRegisters: appState.registerTables.flatMap(rt => rt.Registers)
         })
       })
 
@@ -108,36 +206,57 @@ export function MainWindow() {
   }, [appState.selectedProduct])
 
   // 評估規則
-  const evaluateRules = useCallback(async (product: ProductFileInfo | null, registerTables: RegisterTableViewModel[]) => {
+  const evaluateRules = useCallback(async (product: ProductFileInfo | null, registerViewModelsOrTables?: ConcreteRegisterViewModel[] | any[], fallbackRegisterTables?: any[]) => {
     if (!product?.FileName) {
       console.log('evaluateRules: 沒有選擇產品，跳過')
       return
     }
 
-    if (!registerTables || registerTables.length === 0) {
-      console.log('evaluateRules: 沒有寄存器表，跳過')
-      return
-    }
-
-    console.log('evaluateRules: 開始評估規則...')
 
     try {
       // 構建 RegValues 表
       const regValues: Record<string, any> = {}
-      registerTables.forEach(rt => {
-        rt.Registers.forEach(reg => {
-          // 使用 RegName_Value 格式
-          if (reg.DACValues && reg.DACValues.length > 0) {
-            const value = reg.DACValues[reg.DAC]
-            regValues[`${reg.Name}_Value`] = value
-            console.log(`  RegValues.${reg.Name}_Value =`, value)
-          }
-          regValues[`${reg.Name}_DAC`] = reg.DAC
-        })
-      })
 
-      console.log('regValues keys:', Object.keys(regValues))
 
+      const dataSource = registerViewModelsOrTables || fallbackRegisterTables;
+
+      if (dataSource && dataSource.length > 0) {
+        // 檢查第一個元素是否是 RegisterViewModel
+        const firstItem = dataSource[0];
+        if (firstItem && typeof firstItem === 'object' && 'dac' in firstItem) {
+          // 使用 RegisterViewModel
+          const registerViewModels = dataSource as ConcreteRegisterViewModel[];
+          registerViewModels.forEach(rvm => {
+            // 使用 RegName_Value 格式
+            if (rvm.dacValues && rvm.dacValues.length > rvm.dac) {
+              const value = rvm.dacValues[rvm.dac]
+              regValues[`${rvm.name}_Value`] = value
+            }
+            regValues[`${rvm.name}_DAC`] = rvm.dac
+          })
+        } else {
+          // 使用 registerTables（舊方式）
+          const registerTables = dataSource as any[];
+          registerTables.forEach(rt => {
+            rt.Registers.forEach((reg: any) => {
+              // 使用 RegName_Value 格式
+              if (reg.DACValues && reg.DACValues.length > 0) {
+                const value = reg.DACValues[reg.DAC]
+                regValues[`${reg.Name}_Value`] = value
+                console.log(`[evaluateRules fallback] RegValues.${reg.Name}_Value =`, value, `(DAC=${reg.DAC}, DACValues.length=${reg.DACValues.length})`)
+              } else {
+                console.log(`[evaluateRules fallback] RegValues.${reg.Name} has no DACValues (DAC=${reg.DAC})`)
+              }
+              regValues[`${reg.Name}_DAC`] = reg.DAC
+            })
+          })
+        }
+      }
+
+      //console.log('[evaluateRules] regValues keys:', Object.keys(regValues))
+      //console.log('[evaluateRules] regValues sample:', Object.fromEntries(Object.entries(regValues).slice(0, 10)))
+
+      // 服務端直接使用 wasmoon 執行規則
       const response = await fetch('/api/products/rules', {
         method: 'POST',
         headers: {
@@ -151,7 +270,7 @@ export function MainWindow() {
 
       if (response.ok) {
         const data = await response.json()
-        console.log('規則評估結果:', data.ruleResults)
+        // console.log('規則評估結果:', data.ruleResults)
         setAppState(prev => ({
           ...prev,
           ruleResults: data.ruleResults || [],
@@ -199,11 +318,16 @@ export function MainWindow() {
         Registers: table.Registers.map((reg: any, rIdx: number) => ({
           ...reg,
           CurrentValue: reg.DAC,
+          DefaultDAC: reg.DAC, // 設置默認DAC值用於初始化
           IsCheckBox: false,
           AddressColorIndex: rIdx % 8,
           DependentParameters: reg.DependentParameters || []
         })),
-        Data: [],
+        // 初始化 Byte Data，為每個 NeedShowMemIndex 創建對應的數據項
+        Data: (table.NeedShowMemIndex || []).map(address => ({
+          Address: address,
+          Bytes: [0] // 初始化為 0，可以通過 I2C 讀取來更新
+        })),
         Pages: ['Page 1'],
         SelectedPage: 'Page 1',
         ViewMode: 'GroupView' as const,
@@ -235,7 +359,7 @@ export function MainWindow() {
         selectedRuleResult: undefined
       }, () => {
         // 狀態更新完成後的回調
-        console.log('handleProductSelect: 狀態已更新，調用 evaluateRules')
+        // console.log('handleProductSelect: 狀態已更新，調用 evaluateRules')
         evaluateRules(product, registerTables)
       })
     } catch (error) {
@@ -268,7 +392,7 @@ export function MainWindow() {
       />
 
       {/* 選單列 */}
-      <MenuBar />
+      <MenuBar onViewModeChange={(mode) => setViewMode(mode)} />
 
       {/* 狀態列 */}
       <StatusBar
@@ -298,15 +422,9 @@ export function MainWindow() {
                 isI2cBusy={appState.isI2cBusy}
                 onProductSelect={handleProductSelect}
                 onAddressSelect={(address) => updateAppState({ selectedAddress: address })}
+                onReadRegisters={readRegisters}
+                onWriteRegisters={writeRegisters}
               />
-              {/* Design Rule Check 結果 */}
-              <div className="p-2 border-t border-gray-200">
-                <RuleResultPanel
-                  ruleResults={appState.ruleResults}
-                  selectedRuleResult={appState.selectedRuleResult}
-                  onSelectRule={(rule) => updateAppState({ selectedRuleResult: rule })}
-                />
-              </div>
               {isMobile && (
                 <button
                   onClick={() => setIsLeftPanelOpen(false)}
@@ -365,6 +483,8 @@ export function MainWindow() {
                 registerTables={appState.registerTables}
                 onRegisterTableSelect={(table) => updateAppState({ selectedRegisterTable: table })}
                 onRecalculateDAC={recalculateDAC}
+                onRegisterChange={(registerViewModels, fallbackTables) => evaluateRules(appState.selectedProduct, registerViewModels, fallbackTables)}
+                viewMode={viewMode}
               />
             )}
 
