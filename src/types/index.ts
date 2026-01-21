@@ -158,6 +158,8 @@ export interface RegisterViewModel {
   DependentParameters?: string[]; // 依賴的參數名稱列表
 }
 
+export { ConcreteRegisterViewModel } from './concreteRegisterViewModel'
+
 // 暫存器數據
 export interface RegisterData {
   Address: number;

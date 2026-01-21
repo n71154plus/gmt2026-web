@@ -26,7 +26,7 @@ export async function GET() {
       debugInfo.registerTableMatch = rtMatch ? '找到' : '未找到'
       debugInfo.rtMatchIndex = rtMatch ? rtMatch.index : -1
 
-      if (rtMatch) {
+      if (rtMatch && rtMatch.index !== undefined) {
         const rtStart = productContent.indexOf('{', rtMatch.index + 15)
         debugInfo.registerTableStart = rtStart
         debugInfo.registerTableStartChar = rtStart >= 0 ? productContent[rtStart] : 'N/A'

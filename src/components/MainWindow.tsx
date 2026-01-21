@@ -7,7 +7,7 @@ import { StatusBar } from './StatusBar'
 import { LeftPanel } from './LeftPanel'
 import { MainContent } from './MainContent'
 import { ChartPanel } from './ChartPanel'
-import { AppState, ProductFileInfo, RegisterViewModel, RuleResult } from '@/types'
+import { AppState, ProductFileInfo, RegisterViewModel, ConcreteRegisterViewModel, RuleResult } from '@/types'
 
 export function MainWindow() {
   const [activeTab, setActiveTab] = useState<'registers' | 'chart'>('registers')
@@ -324,7 +324,7 @@ export function MainWindow() {
           DependentParameters: reg.DependentParameters || []
         })),
         // 初始化 Byte Data，為每個 NeedShowMemIndex 創建對應的數據項
-        Data: (table.NeedShowMemIndex || []).map(address => ({
+        Data: (table.NeedShowMemIndex || []).map((address: number) => ({
           Address: address,
           Bytes: [0] // 初始化為 0，可以通過 I2C 讀取來更新
         })),
@@ -483,7 +483,7 @@ export function MainWindow() {
                 registerTables={appState.registerTables}
                 onRegisterTableSelect={(table) => updateAppState({ selectedRegisterTable: table })}
                 onRecalculateDAC={recalculateDAC}
-                onRegisterChange={(registerViewModels, fallbackTables) => evaluateRules(appState.selectedProduct, registerViewModels, fallbackTables)}
+                onRegisterChange={(registerViewModels, fallbackTables) => evaluateRules(appState.selectedProduct || null, registerViewModels, fallbackTables)}
                 viewMode={viewMode}
               />
             )}

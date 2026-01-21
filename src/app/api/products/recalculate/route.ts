@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server'
 import fs from 'fs'
 import path from 'path'
 import { parseLuaProduct } from '@/lib/lua/luaParser'
-import { calculateDACValues } from '../[filename]/route'
+import { calculateDACValues } from '@/lib/lua/dacCalculator'
 
 const LUA_SCRIPTS_DIR = path.join(process.cwd(), 'public', 'scripts', 'lua')
 
@@ -115,7 +115,7 @@ export async function POST(request: Request) {
       if (key.endsWith('_DAC')) {
         const regName = key.slice(0, -4)
         if (registerMap[regName]) {
-          registerMap[regName].DAC = value
+          registerMap[regName].DAC = value as number
         }
       }
     }

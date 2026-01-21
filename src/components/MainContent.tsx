@@ -11,7 +11,7 @@ interface MainContentProps {
   selectedRegisterTable?: RegisterTableViewModel
   registerTables: RegisterTableViewModel[]
   onRegisterTableSelect: (table: RegisterTableViewModel) => void
-  onRecalculateDAC?: (regName: string, parameters: Record<string, number>) => (string | number)[]
+  onRecalculateDAC?: (regName: string, parameters: Record<string, number>) => Promise<(string | number)[]>
   onRegisterChange?: (registerViewModels?: ConcreteRegisterViewModel[], fallbackTables?: any[]) => void
   viewMode?: 'GroupView' | 'AddressSort'
 }

@@ -259,5 +259,4 @@ export function validateHexFile(content: string): { valid: boolean; errors: stri
   }
 }
 
-// 導出類型
-export type { HexParseResult }
+// 類型已在上面定義時導出
