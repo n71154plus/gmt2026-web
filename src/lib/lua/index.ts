@@ -2,3 +2,4 @@
 export * from './types'
 export * from './parser'
 export * from './luaParser'
+export * from './dacCalculator'

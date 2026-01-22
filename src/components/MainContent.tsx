@@ -56,6 +56,7 @@ export function MainContent({
     onRegisterChangeRef.current = onRegisterChange;
   }, [onRegisterChange]);
 
+
   // 創建 DataBits 實例 - 使用 ref 確保實例穩定
   const dataBitsRef = useRef<DataBits | null>(null);
   const getCurrentDataBits = useCallback(() => dataBitsRef.current, []);
@@ -229,8 +230,6 @@ export function MainContent({
 
   // 處理 RegisterViewModel 值變更
   const handleRegisterViewModelChange = useCallback((vm: ConcreteRegisterViewModel, newValue: number) => {
-    // console.log(`[handleRegisterViewModelChange] ${vm.name} value changed to: ${newValue}`)
-
     // 記錄舊值
     const oldDac = vm.dac;
 
@@ -260,7 +259,7 @@ export function MainContent({
           dependsOnThis = valueRefPattern.test(r.rawRegister.DACValueExpr)
 
           if (dependsOnThis) {
-            // 構建所有當前寄存器表中寄存器的 DAC 參數
+            // 只傳遞必要的 DAC 參數，registerMap 會處理 Value 引用
             registerViewModels.forEach(paramReg => {
               externalParams[`${paramReg.name}_DAC`] = paramReg.dac
             })
@@ -271,9 +270,22 @@ export function MainContent({
           // 收集重新計算的 Promise
           const recalculationPromise = (async () => {
             try {
-              const newDACValues = await onRecalculateDAC(r.name, externalParams)
+              const currentRegisters = registerViewModels.map(vm => ({
+                Name: vm.name,
+                DAC: vm.dac,
+                DACValues: vm.dacValues
+              }))
+              const newDACValues = await onRecalculateDAC(r.name, externalParams, currentRegisters)
+
               r.rawRegister.DACValues = newDACValues
-              console.log(`Recalculated DACValues for ${r.name}:`, newDACValues)
+
+              // 如果當前 DAC 值超出新範圍，重置為默認值
+              if (r.dac >= newDACValues.length) {
+                r.dac = 0
+              }
+
+              // 強制重新渲染以更新 comboBox 選項
+              forceRerender()
             } catch (error) {
               console.error(`Failed to recalculate DACValues for ${r.name}:`, error)
             }
@@ -418,6 +430,19 @@ function RegisterControl({
   // 使用 useRef 來追蹤當前值，確保 UI 正確更新
   const currentValueRef = useRef(registerViewModel.dac)
   currentValueRef.current = registerViewModel.dac
+
+  // 當 DACValues 改變時強制重新渲染
+  const [, forceUpdate] = useState(0)
+  const prevDACValuesLengthRef = useRef(registerViewModel.dacValues?.length || 0)
+
+  useEffect(() => {
+    const currentLength = registerViewModel.dacValues?.length || 0
+    if (currentLength !== prevDACValuesLengthRef.current) {
+      prevDACValuesLengthRef.current = currentLength
+      forceUpdate(prev => prev + 1)
+    }
+  }, [registerViewModel.dacValues?.length, registerViewModel.name])
+
 
   // 判斷控制項類型（完全參考 GMT2026 的邏輯）
   // 優先級：IsCheckBox > IsTextBlock > ComboBox > NumberInput
